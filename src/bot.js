@@ -177,7 +177,7 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // 🔹 Remove bot mention (not needed anymore, but safe)
+  // 🔹 Remove bot mention (just in case)
   let userText = message.content.replace(/<@!?\d+>/g, '').trim();
   if (!userText) return;
 
@@ -202,3 +202,14 @@ client.on('messageCreate', async (message) => {
 });
 
 client.login(process.env.DISCORD_TOKEN);
+
+// ================== KEEP ALIVE (Render Fix) ==================
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get('/healthz', (req, res) => res.send('OK'));
+
+app.listen(PORT, () => {
+  console.log(`✅ Web server running on port ${PORT}`);
+});
