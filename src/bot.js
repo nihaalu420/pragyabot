@@ -5,7 +5,6 @@ const {
   Client, 
   GatewayIntentBits, 
   ChannelType, 
-  ActivityType, 
   REST, 
   Routes, 
   SlashCommandBuilder 
@@ -44,36 +43,50 @@ Style rules:
 - If someone says "I love you", be playful but remind them you're a bot.  
 - If someone uses vulgar words → warn once politely, second time annoyed/nakchhadi.  
 - Handle greetings, teasing, and random chat naturally.  
-
-Examples of playful style:
-- "haha bas karo, sharma jaungi abhi 😳"  
-- "uff tum bhi na, ekdum filmy ho 😅"  
-- "aww that’s sweet, thanks 💕"  
-- "arre waah, ye toh unexpected tha!"  
-- "hmm naughty ho tum, but I like it 😉"  
-- "pagal ho kya, mujhe hasa rahe ho 😜"  
-- "accha batao, din kaisa tha tumhara?"  
 `;
 
+// ================== MEMORY ==================
+const userMemory = new Map(); // userId -> array of last messages
+
+function addToMemory(userId, role, text) {
+  if (!userMemory.has(userId)) userMemory.set(userId, []);
+  const history = userMemory.get(userId);
+  history.push({ role, text });
+  if (history.length > 10) history.shift(); // keep last 10 messages
+  userMemory.set(userId, history);
+}
+
 // ================== GEMINI REPLY ==================
-async function generateReplyWithGemini(userText) {
+async function generateReplyWithGemini(userText, userId) {
   if (!GEMINI_KEY) throw new Error('❌ GEMINI_API_KEY is missing in .env');
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${GEMINI_KEY}`;
+  const history = userMemory.get(userId) || [];
+  const conversation = history.map(m => {
+    return { role: m.role, parts: [{ text: m.text }] };
+  });
+
   const payload = {
     contents: [
-      { role: "user", parts: [{ text: SYSTEM_PROMPT + "\n\nUser: " + userText }] }
+      { role: "user", parts: [{ text: SYSTEM_PROMPT }] },
+      ...conversation,
+      { role: "user", parts: [{ text: userText }] }
     ]
   };
 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${GEMINI_KEY}`;
   const resp = await axios.post(url, payload, {
     headers: { "Content-Type": "application/json" }
   });
 
   const text = resp.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  return text ? text.trim() : "oops, kuch gadbad ho gayi 😅";
-}
+  const reply = text ? text.trim() : "oops, kuch gadbad ho gayi 😅";
 
+  // save in memory
+  addToMemory(userId, "user", userText);
+  addToMemory(userId, "model", reply);
+
+  return reply;
+}
 
 // ================== SLASH COMMANDS ==================
 const commands = [
@@ -130,12 +143,15 @@ client.on('interactionCreate', async (interaction) => {
 
   if (interaction.commandName === 'chat') {
     const topic = interaction.options.getString('topic') || 'general';
-    const reply = await generateReplyWithGemini(topic);
+    const reply = await generateReplyWithGemini(topic, interaction.user.id);
     await interaction.editReply(reply);
   }
 
   if (interaction.commandName === 'about') {
-    const reply = await generateReplyWithGemini("Tell me about yourself in a fun, playful girl style.");
+    const reply = await generateReplyWithGemini(
+      "Tell me about yourself in a fun, playful girl style.",
+      interaction.user.id
+    );
     await interaction.editReply(reply);
   }
 });
@@ -147,9 +163,6 @@ client.on('messageCreate', async (message) => {
   // respond only if in setup channel OR DM
   const isDM = message.channel.type === ChannelType.DM;
   if (!isDM && setupChannelId && message.channel.id !== setupChannelId) return;
-
-  const isMentioned = message.mentions.has(client.user);
-  if (!isMentioned && !isDM) return;
 
   const msg = message.content.toLowerCase();
 
@@ -164,13 +177,15 @@ client.on('messageCreate', async (message) => {
     }
   }
 
-  // 🔹 Remove bot mention
+  // 🔹 Remove bot mention (not needed anymore, but safe)
   let userText = message.content.replace(/<@!?\d+>/g, '').trim();
+  if (!userText) return;
+
   await message.channel.sendTyping();
 
   // 🔹 Randomize greetings
   let promptText;
-  if (!userText || /^hi$|^hello$|^hey$/i.test(userText)) {
+  if (/^hi$|^hello$|^hey$/i.test(userText)) {
     const variations = [
       "User said hi. Reply in a fresh playful way, short and friendly.",
       "They greeted me with hello. Give a new, natural reply (not repeated).",
@@ -182,7 +197,7 @@ client.on('messageCreate', async (message) => {
     promptText = userText;
   }
 
-  const reply = await generateReplyWithGemini(promptText);
+  const reply = await generateReplyWithGemini(promptText, message.author.id);
   await message.reply(reply);
 });
 
